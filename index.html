@@ -645,43 +645,69 @@ function clearSig(id){document.getElementById('sig-'+id).getContext('2d').clearR
 initCanvas('vendedor'); initCanvas('comprador');
 
 // ── SINCRONIZACIÓN CON GOOGLE SHEETS ──────────────────────────────
+// Usamos iframe oculto + formulario: método más compatible con tablets y
+// cualquier navegador, evita problemas de CORS con Google Apps Script.
 
 function sincronizarPedido(order) {
   if (!WEBAPP_URL || WEBAPP_URL.indexOf('PEGA_AQUI') !== -1) return;
-  // Enviamos sin las firmas (imágenes base64 muy pesadas) para no saturar la red
-  var payload = {
-    num:          order.num,
-    fecha:        order.fecha,
-    hora:         order.hora,
-    asesor:       order.asesor,
-    cliente:      order.cliente,
-    tipo:         order.tipo,
-    condicion:    order.condicion,
-    observaciones:order.observaciones,
-    total:        order.total,
-    items:        order.items
-  };
-  fetch(WEBAPP_URL, {
-    method:  'POST',
-    mode:    'no-cors',          // evita problemas de CORS con Google Apps Script
-    headers: {'Content-Type': 'text/plain'},
-    body:    JSON.stringify(payload)
-  }).then(function() {
-    // Marcar como sincronizado en savedOrders
-    savedOrders = savedOrders.map(function(s) {
-      return s.num === order.num ? Object.assign({}, s, {sincronizado: true}) : s;
-    });
-    localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
-    // Quitar de la cola
-    syncQueue = syncQueue.filter(function(n) { return n !== order.num; });
-    localStorage.setItem('hym_sync_queue', JSON.stringify(syncQueue));
-    // Actualizar ícono de estado en pantalla de éxito
-    var el = document.getElementById('sync-estado');
-    if (el) el.innerHTML = '<span style="color:var(--green);">&#10003; Pedido registrado en el sistema</span>';
-  }).catch(function() {
-    // Sin internet — queda en la cola para el próximo intento
-    encolarParaSync(order.num);
+  if (!navigator.onLine) { encolarParaSync(order.num); return; }
+
+  var payload = JSON.stringify({
+    num:           order.num,
+    fecha:         order.fecha,
+    hora:          order.hora,
+    asesor:        order.asesor,
+    cliente:       order.cliente,
+    tipo:          order.tipo,
+    condicion:     order.condicion,
+    observaciones: order.observaciones,
+    total:         order.total,
+    items:         order.items
   });
+
+  // Crear iframe oculto como destino del formulario
+  var frameId = 'hym_frame_' + order.num;
+  var frame = document.getElementById(frameId);
+  if (!frame) {
+    frame = document.createElement('iframe');
+    frame.id = frameId;
+    frame.name = frameId;
+    frame.style.display = 'none';
+    document.body.appendChild(frame);
+  }
+
+  // Crear formulario oculto apuntando al iframe
+  var form = document.createElement('form');
+  form.method  = 'POST';
+  form.action  = WEBAPP_URL;
+  form.target  = frameId;
+  form.style.display = 'none';
+
+  var input = document.createElement('input');
+  input.type  = 'hidden';
+  input.name  = 'payload';
+  input.value = payload;
+  form.appendChild(input);
+
+  document.body.appendChild(form);
+  form.submit();
+  document.body.removeChild(form);
+
+  // Asumir éxito después de 5 segundos (no podemos leer respuesta cross-origin)
+  setTimeout(function() {
+    marcarSincronizado(order.num);
+  }, 5000);
+}
+
+function marcarSincronizado(num) {
+  savedOrders = savedOrders.map(function(s) {
+    return s.num === num ? Object.assign({}, s, {sincronizado: true}) : s;
+  });
+  localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
+  syncQueue = syncQueue.filter(function(n) { return n !== num; });
+  localStorage.setItem('hym_sync_queue', JSON.stringify(syncQueue));
+  var el = document.getElementById('sync-estado');
+  if (el) el.innerHTML = '<span style="color:var(--green);">&#10003; Pedido enviado al sistema</span>';
 }
 
 function encolarParaSync(num) {
@@ -690,13 +716,12 @@ function encolarParaSync(num) {
     localStorage.setItem('hym_sync_queue', JSON.stringify(syncQueue));
   }
   var el = document.getElementById('sync-estado');
-  if (el) el.innerHTML = '<span style="color:var(--orange);">&#8987; Sin conexión — se enviará al Sheet cuando haya WiFi</span>';
+  if (el) el.innerHTML = '<span style="color:var(--orange);">&#8987; Sin conexi\u00f3n \u2014 se enviar\u00e1 al llegar al hotel</span>';
 }
 
 function intentarSincronizarPendientes() {
-  // Al abrir la app con WiFi, reintenta enviar los pedidos que quedaron en cola
   if (!WEBAPP_URL || WEBAPP_URL.indexOf('PEGA_AQUI') !== -1) return;
-  if (!syncQueue.length) return;
+  if (!syncQueue.length || !navigator.onLine) return;
   var pendientes = syncQueue.slice();
   pendientes.forEach(function(num) {
     var order = savedOrders.find(function(o) { return o.num === num; });
