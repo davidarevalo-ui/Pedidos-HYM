@@ -1,6 +1,6 @@
 // ── HERRAMIENTAS Y MÁS – Service Worker ──
 // Cambia el número de versión aquí cada vez que actualices el index.html
-var CACHE = 'hym-v4';
+var CACHE = 'hym-v5';
 var ARCHIVOS = [
   './',
   './index.html',
