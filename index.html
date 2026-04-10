@@ -388,6 +388,13 @@ var state={tipo:'normal',lista:1,cliente:{},condicion:'60 dias credito',carrito:
 var openQtyIdx=null;
 var savedOrders=JSON.parse(localStorage.getItem('hym_orders')||'[]');
 var lastNum=parseInt(localStorage.getItem('hym_last_num')||'27900');
+
+// ID único de esta tablet — se genera una sola vez y se guarda permanentemente
+var TABLET_ID = localStorage.getItem('hym_tablet_id');
+if (!TABLET_ID) {
+  TABLET_ID = 'T' + Date.now().toString(36).slice(-4).toUpperCase();
+  localStorage.setItem('hym_tablet_id', TABLET_ID);
+}
 var syncQueue=JSON.parse(localStorage.getItem('hym_sync_queue')||'[]'); // pedidos pendientes de enviar al Sheet
 
 // ── NAV ──
@@ -583,7 +590,10 @@ function updateCartBtn() {
 // ── REVIEW ──
 function renderReview() {
   if(!state.pedidoNum){lastNum++;state.pedidoNum=lastNum;localStorage.setItem('hym_last_num',''+lastNum);}
-  document.getElementById('pedido-num-display').textContent='N '+String(state.pedidoNum).padStart(5,'0');
+  // Número de pedido único: número local + ID de tablet (ej: 27903-T4F2A)
+  var numDisplay = String(state.pedidoNum).padStart(5,'0') + '-' + TABLET_ID;
+  state.pedidoNumCompleto = numDisplay;
+  document.getElementById('pedido-num-display').textContent='N° '+numDisplay;
   document.getElementById('review-sub').textContent=state.cliente.nombre;
   var tbody=document.getElementById('order-tbody'); tbody.innerHTML='';
   var total=0,hasOverride=false;
@@ -788,12 +798,13 @@ function finalizarPedido(){
   var items=Object.values(state.carrito).map(function(item){var sub=item.precio*item.qty;total+=sub;return{ref:item.prod.ref,nombre:item.prod.nombre,qty:item.qty,precioFinal:item.precio,subtotal:sub,esEscala:item.esEscala,esOverride:item.esOverride};});
   var now=new Date();
   var obs=document.getElementById('observaciones');
-  var order={num:String(state.pedidoNum).padStart(5,'0'),fecha:now.toLocaleDateString('es-CO'),hora:now.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),cliente:state.cliente,tipo:state.tipo,lista:state.lista,condicion:state.condicion,observaciones:obs?obs.value:'',asesor:document.getElementById('asesor-nombre').value,items:items,total:total,sigVendedor:sigV,sigComprador:sigC,enviado:false,timestamp:now.toISOString()};
+  var numCompleto = state.pedidoNumCompleto || (String(state.pedidoNum).padStart(5,'0') + '-' + TABLET_ID);
+  var order={num:numCompleto,fecha:now.toLocaleDateString('es-CO'),hora:now.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),cliente:state.cliente,tipo:state.tipo,lista:state.lista,condicion:state.condicion,observaciones:obs?obs.value:'',asesor:document.getElementById('asesor-nombre').value,items:items,total:total,sigVendedor:sigV,sigComprador:sigC,enviado:false,timestamp:now.toISOString()};
   savedOrders.push(order);
   localStorage.setItem('hym_orders',JSON.stringify(savedOrders));
   document.getElementById('saved-count').textContent=savedOrders.length;
   state.currentOrder=order;
-  document.getElementById('success-num').textContent='Pedido N '+order.num;
+  document.getElementById('success-num').textContent='Pedido N° '+order.num;
   // Intentar sincronizar con Google Sheets inmediatamente
   encolarParaSync(order.num);
   sincronizarPedido(order);
