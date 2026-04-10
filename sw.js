@@ -1,5 +1,6 @@
 // ── HERRAMIENTAS Y MÁS – Service Worker ──
-var CACHE = 'hym-v2';
+// Cambia el número de versión aquí cada vez que actualices el index.html
+var CACHE = 'hym-v4';
 var ARCHIVOS = [
   './',
   './index.html',
@@ -29,34 +30,48 @@ self.addEventListener('activate', function(e) {
   self.clients.claim();
 });
 
-// Al hacer fetch: primero intenta la red, si falla usa caché
-// Para Google Sheets (precios): solo intenta red, nunca caché
-// Para el HTML/CSS/fuentes: caché primero si no hay red
+// Al hacer fetch:
+// - index.html → SIEMPRE desde la red primero
+// - Google Sheets y Apps Script → solo red
+// - Todo lo demás → red primero, caché como respaldo offline
 self.addEventListener('fetch', function(e) {
   var url = e.request.url;
 
-  // Google Sheets → solo red (si falla, la app maneja el error con el caché de localStorage)
-  if (url.indexOf('docs.google.com') !== -1 || url.indexOf('googleapis.com') !== -1) {
+  // index.html → siempre red primero, sin importar si hay caché
+  if (url.indexOf('index.html') !== -1 || url.endsWith('/')) {
+    e.respondWith(
+      fetch(e.request).then(function(response) {
+        var copy = response.clone();
+        caches.open(CACHE).then(function(cache) { cache.put(e.request, copy); });
+        return response;
+      }).catch(function() {
+        return caches.match(e.request);
+      })
+    );
+    return;
+  }
+
+  // Google Sheets y Apps Script → solo red
+  if (url.indexOf('docs.google.com') !== -1 ||
+      url.indexOf('googleapis.com') !== -1 ||
+      url.indexOf('script.google.com') !== -1) {
     e.respondWith(fetch(e.request).catch(function() {
       return new Response('', { status: 503 });
     }));
     return;
   }
 
-  // Todo lo demás → caché primero, luego red
+  // Todo lo demás → red primero, caché como respaldo offline
   e.respondWith(
-    caches.match(e.request).then(function(cached) {
-      if (cached) return cached;
-      return fetch(e.request).then(function(response) {
-        // Guarda en caché si es una respuesta válida
-        if (response && response.status === 200 && response.type !== 'opaque') {
-          var copy = response.clone();
-          caches.open(CACHE).then(function(cache) { cache.put(e.request, copy); });
-        }
-        return response;
-      }).catch(function() {
-        // Sin red y sin caché → página de error mínima
-        return new Response(
+    fetch(e.request).then(function(response) {
+      if (response && response.status === 200 && response.type !== 'opaque') {
+        var copy = response.clone();
+        caches.open(CACHE).then(function(cache) { cache.put(e.request, copy); });
+      }
+      return response;
+    }).catch(function() {
+      return caches.match(e.request).then(function(cached) {
+        return cached || new Response(
           '<h2 style="font-family:sans-serif;padding:20px;">Sin conexión.<br>Abre la app desde el ícono instalado en tu tablet.</h2>',
           { headers: { 'Content-Type': 'text/html' } }
         );
