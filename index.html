@@ -186,6 +186,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red);}
   </div>
   <div id="tab-guardados" style="display:none;">
     <div class="offline-notice">&#9889; <span>Pedidos pendientes se enviaran al conectarte a WiFi</span></div>
+    <div id="sync-pendientes-bar" style="display:none;background:#e8f5e9;border:1px solid #a8d5b5;border-radius:8px;padding:12px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+      <span style="flex:1;font-size:13px;color:#1e6e3e;font-weight:600;">&#9889; Tienes pedidos sin sincronizar</span>
+      <button onclick="sincronizarTodosPendientes()" style="background:#27ae60;color:white;border:none;border-radius:6px;padding:10px 16px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;">&#8593; Sincronizar ahora</button>
+    </div>
+    <div id="sync-resultado" style="display:none;border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:13px;font-weight:600;"></div>
     <div id="saved-list"></div>
   </div>
 </div>
@@ -398,7 +403,7 @@ function showTab(id) {
   document.getElementById('tab-nuevo').style.display=id==='nuevo'?'block':'none';
   document.getElementById('tab-guardados').style.display=id==='guardados'?'block':'none';
   document.querySelectorAll('.tab').forEach(function(t,i){t.classList.toggle('active',(i===0&&id==='nuevo')||(i===1&&id==='guardados'));});
-  if(id==='guardados') renderSaved();
+  if(id==='guardados') { renderSaved(); mostrarBarraSincronizacion(); }
 }
 function selectTipo(tipo,el) {
   document.querySelectorAll('.tipo-opt').forEach(function(e){e.classList.remove('selected');});
@@ -713,6 +718,62 @@ function intentarSincronizarPendientes() {
     var order = savedOrders.find(function(o) { return o.num === num; });
     if (order && !order.sincronizado) sincronizarPedido(order);
   });
+}
+
+function mostrarBarraSincronizacion() {
+  var bar = document.getElementById('sync-pendientes-bar');
+  if (!bar) return;
+  // Recalcular cuántos hay sin sincronizar
+  var pendientes = savedOrders.filter(function(o) {
+    return syncQueue.indexOf(o.num) !== -1 && !o.sincronizado;
+  });
+  if (pendientes.length > 0) {
+    bar.style.display = 'flex';
+    bar.querySelector('span').textContent = '⚡ ' + pendientes.length + ' pedido(s) sin sincronizar con el sistema';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function sincronizarTodosPendientes() {
+  if (!navigator.onLine) {
+    var res = document.getElementById('sync-resultado');
+    res.style.display = 'block';
+    res.style.background = '#fff4e5';
+    res.style.border = '1px solid #f5c07a';
+    res.style.color = '#7d4500';
+    res.textContent = '⚠️ Sin conexión a internet. Conéctate al WiFi e intenta de nuevo.';
+    return;
+  }
+  var pendientes = syncQueue.slice();
+  if (!pendientes.length) {
+    var res2 = document.getElementById('sync-resultado');
+    res2.style.display = 'block';
+    res2.style.background = '#e8f5e9';
+    res2.style.border = '1px solid #a8d5b5';
+    res2.style.color = '#1e6e3e';
+    res2.textContent = '✓ No hay pedidos pendientes de sincronizar.';
+    return;
+  }
+  var enviados = 0;
+  pendientes.forEach(function(num) {
+    var order = savedOrders.find(function(o) { return o.num === num; });
+    if (order && !order.sincronizado) {
+      sincronizarPedido(order);
+      enviados++;
+    }
+  });
+  var res3 = document.getElementById('sync-resultado');
+  res3.style.display = 'block';
+  res3.style.background = '#e8f5e9';
+  res3.style.border = '1px solid #a8d5b5';
+  res3.style.color = '#1e6e3e';
+  res3.textContent = '⏳ Sincronizando ' + enviados + ' pedido(s)... Revisa el sistema en unos segundos.';
+  // Ocultar barra después de sincronizar
+  setTimeout(function() {
+    document.getElementById('sync-pendientes-bar').style.display = 'none';
+    renderSaved();
+  }, 6000);
 }
 
 // Intentar sincronizar pendientes al cargar la app
