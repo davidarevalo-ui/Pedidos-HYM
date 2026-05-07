@@ -137,6 +137,13 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red);}
     <div id="sync-status"></div>
     <button onclick="actualizarCache()" style="background:white;border:1px solid #ccc;border-radius:6px;padding:8px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0;">&#128260; Actualizar precios</button>
   </div>
+  <div id="banner-borrador" style="display:none;background:#fff8e1;border:1px solid #f9c851;border-radius:8px;padding:12px 14px;margin-bottom:12px;flex-direction:column;gap:8px;">
+    <div id="borrador-info" style="font-size:13px;font-weight:700;color:#7d5c00;"></div>
+    <div style="display:flex;gap:8px;">
+      <button onclick="recuperarBorrador()" style="flex:1;background:#f39c12;color:white;border:none;border-radius:6px;padding:10px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;">&#8594; Continuar ese pedido</button>
+      <button onclick="descartarBorrador()" style="background:white;border:1px solid #ccc;border-radius:6px;padding:10px 14px;font-family:inherit;font-size:12px;cursor:pointer;">Descartar</button>
+    </div>
+  </div>
   <div class="tabs">
     <button class="tab active" onclick="showTab('nuevo')">&#10133; Nuevo Pedido</button>
     <button class="tab" onclick="showTab('guardados')">&#128203; Guardados (<span id="saved-count">0</span>)</button>
@@ -239,7 +246,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red);}
     <h2>Observaciones</h2>
     <textarea id="observaciones" rows="5" style="width:100%;border:1px solid var(--border);border-radius:5px;padding:10px;font-family:inherit;font-size:14px;resize:vertical;" placeholder="Escribe aqui cualquier nota, acuerdo o instruccion..."></textarea>
   </div>
-  <button class="btn btn-primary" onclick="goTo('signature')">Continuar a Firmas &#8594;</button>
+  <button class="btn btn-primary" onclick="irAFirmas()">Continuar a Firmas &#8594;</button>
   <button class="btn btn-outline" onclick="goTo('review')">&#8592; Volver al pedido</button>
 </div>
 
@@ -444,6 +451,92 @@ if (!TABLET_ID) {
   localStorage.setItem('hym_tablet_id', TABLET_ID);
 }
 var syncQueue=JSON.parse(localStorage.getItem('hym_sync_queue')||'[]'); // pedidos pendientes de enviar al Sheet
+var borrador=JSON.parse(localStorage.getItem('hym_borrador')||'null');
+
+// ── AUTOGUARDADO DE BORRADOR ──────────────────────────────────────
+function guardarBorrador() {
+  var snap = {
+    state:   JSON.parse(JSON.stringify(state)),
+    carrito: JSON.parse(JSON.stringify(state.carrito)),
+    campos: {
+      nombre:    (document.getElementById('cli-nombre')||{}).value||'',
+      nit:       (document.getElementById('cli-nit')||{}).value||'',
+      dir:       (document.getElementById('cli-dir')||{}).value||'',
+      ciudad:    (document.getElementById('cli-ciudad')||{}).value||'',
+      cel:       (document.getElementById('cli-cel')||{}).value||'',
+      email:     (document.getElementById('cli-email')||{}).value||'',
+      asesor:    (document.getElementById('asesor-nombre')||{}).value||'',
+      obs:       (document.getElementById('observaciones')||{}).value||'',
+      condicion: (document.getElementById('condicion')||{}).value||'',
+      lista:     (document.getElementById('lista-select')||{}).value||'1'
+    },
+    ts: Date.now()
+  };
+  borrador = snap;
+  localStorage.setItem('hym_borrador', JSON.stringify(snap));
+}
+
+function borrarBorrador() {
+  borrador = null;
+  localStorage.removeItem('hym_borrador');
+}
+
+function recuperarBorrador() {
+  if(!borrador) return;
+  // Restaurar state
+  state = borrador.state;
+  state.carrito = borrador.carrito;
+  // Restaurar campos del formulario
+  var c = borrador.campos;
+  setTimeout(function() {
+    if(document.getElementById('cli-nombre')) document.getElementById('cli-nombre').value = c.nombre||'';
+    if(document.getElementById('cli-nit'))    document.getElementById('cli-nit').value    = c.nit||'';
+    if(document.getElementById('cli-dir'))    document.getElementById('cli-dir').value    = c.dir||'';
+    if(document.getElementById('cli-ciudad')) document.getElementById('cli-ciudad').value = c.ciudad||'';
+    if(document.getElementById('cli-cel'))    document.getElementById('cli-cel').value    = c.cel||'';
+    if(document.getElementById('cli-email'))  document.getElementById('cli-email').value  = c.email||'';
+    if(document.getElementById('asesor-nombre')) document.getElementById('asesor-nombre').value = c.asesor||'';
+    if(document.getElementById('observaciones'))  document.getElementById('observaciones').value  = c.obs||'';
+    if(document.getElementById('condicion'))  document.getElementById('condicion').value  = c.condicion||'60 dias credito';
+    if(document.getElementById('lista-select')) document.getElementById('lista-select').value = c.lista||'1';
+    // Restaurar tipo cliente
+    if(state.tipo==='distribuidor') {
+      document.getElementById('opt-dist').classList.add('selected');
+      document.getElementById('opt-normal').classList.remove('selected');
+    }
+  }, 100);
+  PRODUCTOS = getProductosActivos();
+  ocultarBannerBorrador();
+  goTo('review');
+}
+
+function descartarBorrador() {
+  if(!confirm('¿Seguro que quieres descartar el pedido en curso? Se perderán los productos seleccionados.')) return;
+  borrarBorrador();
+  ocultarBannerBorrador();
+}
+
+function mostrarBannerBorrador() {
+  var banner = document.getElementById('banner-borrador');
+  if(!banner || !borrador) return;
+  var nombre = borrador.campos ? borrador.campos.nombre : '';
+  var nitems = Object.keys(borrador.carrito||{}).length;
+  if(!nombre || nitems === 0) { borrarBorrador(); return; }
+  banner.style.display = 'flex';
+  document.getElementById('borrador-info').textContent =
+    '⚠️ Pedido en curso: ' + nombre + ' (' + nitems + ' producto' + (nitems!==1?'s':'') + ')';
+}
+
+function ocultarBannerBorrador() {
+  var banner = document.getElementById('banner-borrador');
+  if(banner) banner.style.display = 'none';
+}
+
+// Guardar borrador automáticamente al ir a firmas
+function irAFirmas() {
+  guardarBorrador();
+  goTo('signature');
+}
 
 // ── NAV ──
 function goTo(s) {
@@ -856,6 +949,7 @@ function finalizarPedido(){
   // Intentar sincronizar con Google Sheets inmediatamente
   encolarParaSync(order.num);
   sincronizarPedido(order);
+  borrarBorrador();
   goTo('success');
 }
 
@@ -962,10 +1056,13 @@ function nuevoPedido(){
   document.getElementById('opt-dist').classList.remove('selected');
   document.getElementById('lista-select').value='1';
   document.getElementById('search-input').value='';
+  borrarBorrador();
   goTo('setup');
 }
 
 document.getElementById('saved-count').textContent=savedOrders.length;
+// Mostrar banner si hay un pedido en curso sin terminar
+if(borrador) mostrarBannerBorrador();
 </script>
 <script>
 if ('serviceWorker' in navigator) {
