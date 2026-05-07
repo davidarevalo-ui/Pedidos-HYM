@@ -149,6 +149,19 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red);}
     <button class="tab" onclick="showTab('guardados')">&#128203; Guardados (<span id="saved-count">0</span>)</button>
   </div>
   <div id="tab-nuevo">
+    <!-- Selector Pedido / Cotización -->
+    <div style="display:flex;gap:10px;margin-bottom:12px;">
+      <div id="modo-pedido" onclick="seleccionarModo('pedido')" style="flex:1;border:2px solid var(--red);border-radius:10px;padding:12px;text-align:center;cursor:pointer;background:#fff5f5;">
+        <div style="font-size:22px;">&#128221;</div>
+        <div style="font-weight:700;font-size:13px;color:var(--red);">PEDIDO</div>
+        <div style="font-size:11px;color:#888;margin-top:2px;">Con firma y envío al sistema</div>
+      </div>
+      <div id="modo-cotizacion" onclick="seleccionarModo('cotizacion')" style="flex:1;border:2px solid #ccc;border-radius:10px;padding:12px;text-align:center;cursor:pointer;background:white;">
+        <div style="font-size:22px;">&#128196;</div>
+        <div style="font-weight:700;font-size:13px;color:#555;">COTIZACIÓN</div>
+        <div style="font-size:11px;color:#888;margin-top:2px;">Sin firma, solo PDF</div>
+      </div>
+    </div>
     <div class="card">
       <h2>Datos del Cliente</h2>
       <div class="field-row full"><div>
@@ -194,7 +207,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red);}
         </select>
       </div></div>
     </div>
-    <button class="btn btn-primary" onclick="irAProductos()">Seleccionar Productos &#8594;</button>
+    <button class="btn btn-primary" onclick="irAProductos()" id="btn-seleccionar-productos">&#128221; Seleccionar Productos &#8594;</button>
   </div>
   <div id="tab-guardados" style="display:none;">
     <div class="offline-notice">&#9889; <span>Pedidos pendientes se enviaran al conectarte a WiFi</span></div>
@@ -233,7 +246,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red);}
   </div>
   <div class="total-row"><span class="total-label">Total Pedido</span><span class="total-amount" id="total-display">$ 0</span></div>
   <div id="review-notes"></div>
-  <button class="btn btn-primary" style="margin-top:14px;" onclick="goTo('observaciones')">Continuar &#8594;</button>
+  <button class="btn btn-primary" style="margin-top:14px;" id="btn-review-continuar" onclick="continvarDesdeReview()">Continuar &#8594;</button>
   <button class="btn btn-outline" onclick="goTo('products')">&#8592; Agregar mas productos</button>
 </div>
 
@@ -298,6 +311,18 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red);}
   </div>
   <div id="pdf-preview" style="background:white;border:1px solid #ccc;border-radius:8px;padding:20px;"></div>
   <button class="btn btn-primary" style="margin-top:12px;" onclick="window.print()">Imprimir / Guardar PDF</button>
+</div>
+
+<div id="screen-cotizacion" class="screen">
+  <div class="nav-bar">
+    <button class="back-btn" onclick="goTo('review')">&#8592; Volver</button>
+    <div><div class="nav-title">Cotización</div></div>
+  </div>
+  <div id="cotizacion-preview" style="background:white;border:1px solid #ccc;border-radius:8px;padding:20px;"></div>
+  <div style="display:flex;gap:10px;margin-top:12px;">
+    <button class="btn btn-primary" style="flex:1;" onclick="descargarCotizacion()">&#8595; Descargar PDF</button>
+    <button class="btn btn-outline" style="flex:1;" onclick="nuevoPedido()">&#10133; Nuevo</button>
+  </div>
 </div>
 
 <script>
@@ -439,7 +464,7 @@ function showSync(status) {
 })();
 
 // ── STATE ──
-var state={tipo:'normal',lista:1,cliente:{},condicion:'60 dias credito',carrito:{},pedidoNum:null,currentOrder:null};
+var state={tipo:'normal',lista:1,cliente:{},condicion:'60 dias credito',carrito:{},pedidoNum:null,currentOrder:null,modo:'pedido'};
 var openQtyIdx=null;
 var savedOrders=JSON.parse(localStorage.getItem('hym_orders')||'[]');
 var lastNum=parseInt(localStorage.getItem('hym_last_num')||'27900');
@@ -541,11 +566,25 @@ function irAFirmas() {
 // ── NAV ──
 function goTo(s) {
   document.querySelectorAll('.screen').forEach(function(x){x.classList.remove('active');});
-  var m={setup:'screen-setup',products:'screen-products',review:'screen-review',observaciones:'screen-observaciones',signature:'screen-signature',success:'screen-success',pdf:'screen-pdf'};
+  var m={setup:'screen-setup',products:'screen-products',review:'screen-review',observaciones:'screen-observaciones',signature:'screen-signature',success:'screen-success',pdf:'screen-pdf',cotizacion:'screen-cotizacion'};
   document.getElementById(m[s]).classList.add('active');
   if(s==='products') renderProducts();
   if(s==='review') renderReview();
+  if(s==='cotizacion') renderCotizacion();
   window.scrollTo(0,0);
+}
+
+function seleccionarModo(modo) {
+  state.modo = modo;
+  var esCot = modo === 'cotizacion';
+  // Visual — resaltar seleccionado
+  document.getElementById('modo-pedido').style.borderColor    = esCot ? '#ccc' : 'var(--red)';
+  document.getElementById('modo-pedido').style.background     = esCot ? 'white' : '#fff5f5';
+  document.getElementById('modo-cotizacion').style.borderColor= esCot ? '#2980b9' : '#ccc';
+  document.getElementById('modo-cotizacion').style.background  = esCot ? '#eaf4fb' : 'white';
+  // Cambiar texto del botón
+  var btn = document.getElementById('btn-seleccionar-productos');
+  btn.textContent = esCot ? '📄 Seleccionar Productos para Cotizar →' : '📝 Seleccionar Productos →';
 }
 function showTab(id) {
   document.getElementById('tab-nuevo').style.display=id==='nuevo'?'block':'none';
@@ -930,7 +969,91 @@ function sincronizarTodosPendientes() {
 // Intentar sincronizar pendientes al cargar la app
 setTimeout(intentarSincronizarPendientes, 3000);
 
-// ── FINALIZE ──
+// ── CONTINUAR DESDE REVIEW SEGÚN MODO ──
+function continvarDesdeReview() {
+  if(state.modo === 'cotizacion') {
+    goTo('cotizacion');
+  } else {
+    goTo('observaciones');
+  }
+}
+
+// ── COTIZACIÓN ────────────────────────────────────────────────────
+var cotizacionNum = parseInt(localStorage.getItem('hym_cotizacion_num')||'1');
+
+function renderCotizacion() {
+  cotizacionNum++;
+  localStorage.setItem('hym_cotizacion_num', String(cotizacionNum));
+  var preview = document.getElementById('cotizacion-preview');
+  preview.innerHTML = buildCotizacionHTML();
+}
+
+function buildCotizacionHTML() {
+  var total = 0;
+  var items = Object.values(state.carrito);
+  var rows = items.map(function(item) {
+    var sub = item.precio * item.qty; total += sub;
+    return '<tr><td style="text-align:center;">'+item.qty+'</td>'+
+      '<td>'+item.prod.ref+'</td>'+
+      '<td>'+item.prod.nombre+'</td>'+
+      '<td style="text-align:right;">'+formatCOP(item.precio)+'</td>'+
+      '<td style="text-align:right;font-weight:700;">'+formatCOP(sub)+'</td></tr>';
+  }).join('');
+
+  var now = new Date();
+  var fecha = now.toLocaleDateString('es-CO');
+  var vence = new Date(now.getTime() + 15*24*60*60*1000).toLocaleDateString('es-CO');
+  var cli = state.cliente;
+
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8">'+
+    '<style>body{font-family:Arial,sans-serif;font-size:11px;margin:20px;}'+
+    'table{width:100%;border-collapse:collapse;font-size:10px;margin:10px 0;}'+
+    'td,th{border:1px solid #999;padding:5px 7px;}'+
+    'thead tr{background:#1a5276;color:white;}'+
+    '.membrete{background:#1a5276;color:white;padding:12px;border-radius:6px;margin-bottom:10px;}'+
+    '.cot-title{font-size:20px;font-weight:900;letter-spacing:2px;}'+
+    '.total-row td{font-weight:700;background:#eaf4fb;}'+
+    '</style></head><body>'+
+    '<div class="membrete">'+
+      '<div class="cot-title">COTIZACIÓN</div>'+
+      '<div style="font-size:13px;margin-top:4px;">HERRAMIENTAS Y MÁS S.A.S</div>'+
+      '<div style="font-size:10px;opacity:0.85;">CARRERA 72A #71A-31 · BOGOTÁ · NIT: 900.938.307-7 · CEL: 313 210 3290</div>'+
+    '</div>'+
+    '<table style="margin-bottom:8px;"><tr>'+
+      '<td><b>N° Cotización:</b> COT-'+String(cotizacionNum).padStart(4,'0')+'-'+TABLET_ID+'</td>'+
+      '<td><b>Fecha:</b> '+fecha+'</td>'+
+      '<td><b>Válida hasta:</b> '+vence+'</td>'+
+    '</tr><tr>'+
+      '<td><b>Cliente:</b> '+(cli.nombre||'')+'</td>'+
+      '<td><b>NIT:</b> '+(cli.nit||'—')+'</td>'+
+      '<td><b>Ciudad:</b> '+(cli.ciudad||'—')+'</td>'+
+    '</tr><tr>'+
+      '<td colspan="3"><b>Asesor:</b> '+(document.getElementById('asesor-nombre')?document.getElementById('asesor-nombre').value||'':'')+'</td>'+
+    '</tr></table>'+
+    '<table><thead><tr><th style="width:40px;">Cant.</th><th style="width:80px;">Ref.</th><th>Descripción</th><th style="width:90px;text-align:right;">Precio Unit.</th><th style="width:90px;text-align:right;">Total</th></tr></thead>'+
+    '<tbody>'+rows+'</tbody>'+
+    '<tfoot><tr class="total-row"><td colspan="4" style="text-align:right;">TOTAL COTIZACIÓN</td><td style="text-align:right;">'+formatCOP(total)+'</td></tr></tfoot>'+
+    '</table>'+
+    '<div style="margin-top:12px;padding:10px;background:#eaf4fb;border:1px solid #aed6f1;border-radius:5px;font-size:10px;color:#1a5276;">'+
+      '<b>Condiciones:</b> Esta cotización tiene una validez de 15 días a partir de la fecha de emisión. '+
+      'Los precios pueden estar sujetos a cambios sin previo aviso. '+
+      'Para convertir esta cotización en pedido en firme, comuníquese con su asesor comercial.'+
+    '</div>'+
+    '</body></html>';
+}
+
+function descargarCotizacion() {
+  var html = buildCotizacionHTML();
+  var blob = new Blob([html], {type:'text/html'});
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href   = url;
+  a.download = 'Cotizacion-' + (state.cliente.nombre||'cliente').replace(/\s+/g,'-') + '-' + new Date().toLocaleDateString('es-CO').replace(/\//g,'-') + '.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 function finalizarPedido(){
   if(!sigS.comprador.has){alert('El cliente debe firmar el pedido');return;}
   var sigV=document.getElementById('sig-vendedor').toDataURL();
@@ -1048,7 +1171,7 @@ function reenviarWhatsApp(num){
 
 // ── RESET ──
 function nuevoPedido(){
-  state={tipo:'normal',lista:1,cliente:{},condicion:'60 dias credito',carrito:{},pedidoNum:null,currentOrder:null};
+  state={tipo:'normal',lista:1,cliente:{},condicion:'60 dias credito',carrito:{},pedidoNum:null,currentOrder:null,modo:'pedido'};
   openQtyIdx=null;
   clearSig('vendedor'); clearSig('comprador');
   ['cli-nombre','cli-nit','cli-dir','cli-ciudad','cli-cel','cli-email','asesor-nombre','observaciones'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
@@ -1056,6 +1179,8 @@ function nuevoPedido(){
   document.getElementById('opt-dist').classList.remove('selected');
   document.getElementById('lista-select').value='1';
   document.getElementById('search-input').value='';
+  // Resetear selector de modo visualmente
+  seleccionarModo('pedido');
   borrarBorrador();
   goTo('setup');
 }
