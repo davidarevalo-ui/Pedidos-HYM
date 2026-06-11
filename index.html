@@ -546,10 +546,12 @@ function mostrarBannerBorrador() {
   if(!banner || !borrador) return;
   var nombre = borrador.campos ? borrador.campos.nombre : '';
   var nitems = Object.keys(borrador.carrito||{}).length;
-  if(!nombre || nitems === 0) { borrarBorrador(); return; }
+  // Solo descartar si no hay NADA (ni nombre ni productos)
+  if(!nombre && nitems === 0) { borrarBorrador(); return; }
   banner.style.display = 'flex';
+  var quien = nombre || 'Cliente sin nombre';
   document.getElementById('borrador-info').textContent =
-    '⚠️ Pedido en curso: ' + nombre + ' (' + nitems + ' producto' + (nitems!==1?'s':'') + ')';
+    '⚠️ Pedido en proceso: ' + quien + ' (' + nitems + ' producto' + (nitems!==1?'s':'') + ')';
 }
 
 function ocultarBannerBorrador() {
@@ -765,6 +767,8 @@ function updateCartBtn() {
   var n=Object.keys(state.carrito).length;
   document.getElementById('cart-count').textContent=n;
   document.getElementById('cart-btn').style.display=n>0?'flex':'none';
+  // Autoguardar borrador cada vez que cambia el carrito (solo en modo pedido con productos)
+  if(n>0 && state.modo!=='cotizacion') guardarBorrador();
 }
 
 // ── REVIEW ──
@@ -808,6 +812,7 @@ function chgQty(btn) {
   var d=btn.textContent==='-'?-1:1;
   state.carrito[ref].qty=Math.max(1,state.carrito[ref].qty+d);
   renderReview();
+  if(state.modo!=='cotizacion') guardarBorrador();
 }
 function overridePrice(inp) {
   var ref=inp.getAttribute('data-ref');
@@ -816,11 +821,12 @@ function overridePrice(inp) {
   document.querySelector('[data-sub="'+ref+'"]').textContent=formatCOP(p*state.carrito[ref].qty);
   var t=0; Object.values(state.carrito).forEach(function(i){t+=i.precio*i.qty;});
   document.getElementById('total-display').textContent=formatCOP(t);
+  if(state.modo!=='cotizacion') guardarBorrador();
 }
 function delItem(btn) {
   var ref=btn.getAttribute('data-ref');
   delete state.carrito[ref];
-  if(!Object.keys(state.carrito).length) goTo('products');
+  if(!Object.keys(state.carrito).length) { borrarBorrador(); goTo('products'); }
   else {renderReview(); updateCartBtn();}
 }
 
