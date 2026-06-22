@@ -358,7 +358,8 @@ function parseCSV(csvText) {
   for (var i=0;i<lines.length;i++) {
     var cols=parseCSVLine(lines[i].trim());
     var ref=(cols[0]||'').trim(), desc=(cols[1]||cols[2]||'').trim();
-    var precioRaw=(cols[7]||cols[6]||'').trim();
+    var precioRaw=(cols[7]||cols[6]||'').trim();     // col H = CON IVA
+    var precioSinRaw=(cols[6]||'').trim();           // col G = SIN IVA
     if (!ref||ref==='REFERENCIA') continue;
     var esEscala=desc.toUpperCase().indexOf('VOLUMEN')===0;
     var esPromo=!esEscala&&desc.toUpperCase().indexOf('COMPRA')!==-1&&desc.toUpperCase().indexOf('LLEVA')!==-1;
@@ -366,16 +367,18 @@ function parseCSV(csvText) {
     if (esCategoria) continue;
     if (esEscala&&prodActual) {
       var m=ref.match(/X\s*(\d+)/i), cant=m?parseInt(m[1]):0, precio=parsePrecio(precioRaw);
-      if (cant>0&&precio>0){if(!prodActual.escalas)prodActual.escalas=[];prodActual.escalas.push({cant:cant,precio:precio});}
+      var precioSin=parsePrecio(precioSinRaw);
+      if (cant>0&&precio>0){if(!prodActual.escalas)prodActual.escalas=[];prodActual.escalas.push({cant:cant,precio:precio,precioSinIva:precioSin});}
       continue;
     }
     if (esPromo&&prodActual) {
       var m2=ref.match(/X\s*(\d+)/i), cant2=m2?parseInt(m2[1]):0;
-      if (cant2>0){if(!prodActual.escalas)prodActual.escalas=[];prodActual.escalas.push({cant:cant2,precio:0,esPromo:true,promoTexto:desc});}
+      if (cant2>0){if(!prodActual.escalas)prodActual.escalas=[];prodActual.escalas.push({cant:cant2,precio:0,precioSinIva:0,esPromo:true,promoTexto:desc});}
       continue;
     }
     var precio2=parsePrecio(precioRaw);
-    prodActual={ref:ref,nombre:desc,precioBase:precio2,agotado:precio2===0,escalas:[]};
+    var precio2Sin=parsePrecio(precioSinRaw);
+    prodActual={ref:ref,nombre:desc,precioBase:precio2,precioBaseSinIva:precio2Sin,agotado:precio2===0,escalas:[]};
     productos.push(prodActual);
   }
   productos.forEach(function(p){if(!p.escalas||!p.escalas.length)delete p.escalas;});
@@ -598,7 +601,24 @@ function selectTipo(tipo,el) {
   document.querySelectorAll('.tipo-opt').forEach(function(e){e.classList.remove('selected');});
   el.classList.add('selected'); state.tipo=tipo;
 }
+
+// ── ZONAS SIN IVA ──
+var ZONAS_SIN_IVA = ['san jose del guaviare','san andres','leticia','puerto carreno','inirida'];
+function normalizarTexto(txt){
+  return (txt||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
+}
+function esZonaSinIva(ciudad){
+  var c = normalizarTexto(ciudad);
+  if(!c) return false;
+  return ZONAS_SIN_IVA.some(function(z){ return c.indexOf(z) !== -1; });
+}
+
+// Precio CON IVA con descuento de distribuidor (lo que se mostraba siempre)
 function calcPrecio(base){if(!base)return 0;return state.tipo==='distribuidor'?Math.round(base*0.85):base;}
+// Precio SIN IVA con descuento de distribuidor
+function calcPrecioSinIva(baseSin){if(!baseSin)return 0;return state.tipo==='distribuidor'?Math.round(baseSin*0.85):baseSin;}
+// Precio que se le cobra al cliente: sin IVA si es zona exenta, con IVA si es zona normal
+function precioCliente(conIva,sinIva){ return state.zonaSinIva ? sinIva : conIva; }
 function formatCOP(n){return '$ '+Math.round(n).toLocaleString('es-CO');}
 
 // ── IR A PRODUCTOS ──
@@ -609,9 +629,13 @@ function irAProductos() {
   state.tipo=document.getElementById('opt-dist').classList.contains('selected')?'distribuidor':'normal';
   state.cliente={nombre:nombre,nit:document.getElementById('cli-nit').value,dir:document.getElementById('cli-dir').value,ciudad:document.getElementById('cli-ciudad').value,cel:document.getElementById('cli-cel').value,email:document.getElementById('cli-email').value};
   state.condicion=document.getElementById('condicion').value;
+  state.zonaSinIva=esZonaSinIva(state.cliente.ciudad);
   PRODUCTOS=getProductosActivos();
   if(!PRODUCTOS||!PRODUCTOS.length){alert('Lista de precios no disponible.\nConectate a WiFi y presiona Actualizar precios.');return;}
   openQtyIdx=null;
+  if(state.zonaSinIva){
+    alert('⚠️ ZONA SIN IVA detectada (' + state.cliente.ciudad + ').\nLos precios se mostrarán SIN IVA.');
+  }
   goTo('products');
 }
 
@@ -640,7 +664,7 @@ function filterProducts() {
     var ci=state.carrito[p.ref];
     var panelOpen=openQtyIdx===idx;
     var agotado=p.agotado||p.precioBase===0;
-    var pN=calcPrecio(p.precioBase);
+    var pN=precioCliente(calcPrecio(p.precioBase), calcPrecioSinIva(p.precioBaseSinIva));
 
     // Pills - use data-idx and data-escala attributes, handle via event delegation
     var pillsHtml='';
@@ -652,7 +676,7 @@ function filterProducts() {
           if(esc.esPromo){
             pillsHtml+='<span class="price-pill promo-pill">'+esc.promoTexto+'</span>';
           } else if(esc.precio>0){
-            var pE=calcPrecio(esc.precio);
+            var pE=precioCliente(calcPrecio(esc.precio), calcPrecioSinIva(esc.precioSinIva));
             var isSelEsc=inCart&&ci.esEscala&&ci.esEscalaIdx===k;
             pillsHtml+='<button class="price-pill escala-pill'+(isSelEsc?' sel-escala':'')+'" data-action="pill" data-idx="'+idx+'" data-escala="'+k+'">x'+esc.cant+': '+formatCOP(pE)+'</button>';
           }
@@ -737,8 +761,10 @@ document.getElementById('product-list').addEventListener('click', function(e) {
     var ci2=state.carrito[prod.ref];
     var esEscala=ci2?ci2.esEscala:false;
     var esEscalaIdx=ci2?ci2.esEscalaIdx:undefined;
-    var precio=ci2?ci2.precio:calcPrecio(prod.precioBase);
-    state.carrito[prod.ref]={prod:prod,qty:qty,precio:precio,esEscala:esEscala,esEscalaIdx:esEscalaIdx,esOverride:false};
+    var pConIva = calcPrecio(prod.precioBase);
+    var pSinIva = calcPrecioSinIva(prod.precioBaseSinIva);
+    var precio=ci2?ci2.precio:precioCliente(pConIva,pSinIva);
+    state.carrito[prod.ref]={prod:prod,qty:qty,precio:precio,precioConIva:ci2?ci2.precioConIva:pConIva,precioSinIva:ci2?ci2.precioSinIva:pSinIva,lista:state.lista,esEscala:esEscala,esEscalaIdx:esEscalaIdx,esOverride:false};
     openQtyIdx=null; filterProducts(); updateCartBtn();
   }
   else if(action==='pill') {
@@ -747,9 +773,13 @@ document.getElementById('product-list').addEventListener('click', function(e) {
     var prod2=PRODUCTOS[pidx2];
     var esEscala2=escStr!=='';
     var escIdx=esEscala2?parseInt(escStr):undefined;
-    var precio2=esEscala2?calcPrecio(prod2.escalas[escIdx].precio):calcPrecio(prod2.precioBase);
+    var pc2=esEscala2?calcPrecio(prod2.escalas[escIdx].precio):calcPrecio(prod2.precioBase);
+    var ps2=esEscala2?calcPrecioSinIva(prod2.escalas[escIdx].precioSinIva):calcPrecioSinIva(prod2.precioBaseSinIva);
+    var precio2=precioCliente(pc2,ps2);
     if(state.carrito[prod2.ref]){
       state.carrito[prod2.ref].precio=precio2;
+      state.carrito[prod2.ref].precioConIva=pc2;
+      state.carrito[prod2.ref].precioSinIva=ps2;
       state.carrito[prod2.ref].esEscala=esEscala2;
       state.carrito[prod2.ref].esEscalaIdx=escIdx;
       state.carrito[prod2.ref].esOverride=false;
@@ -817,8 +847,12 @@ function chgQty(btn) {
 function overridePrice(inp) {
   var ref=inp.getAttribute('data-ref');
   var p=Math.round(parseFloat(inp.value)||0);
-  state.carrito[ref].precio=p; state.carrito[ref].esOverride=true; inp.classList.add('overridden');
-  document.querySelector('[data-sub="'+ref+'"]').textContent=formatCOP(p*state.carrito[ref].qty);
+  var it=state.carrito[ref];
+  it.precio=p; it.esOverride=true; inp.classList.add('overridden');
+  // Recalcular sin IVA del precio especial digitado
+  if(state.zonaSinIva){ it.precioSinIva=p; it.precioConIva=Math.round(p*1.19); }
+  else { it.precioConIva=p; it.precioSinIva=Math.round(p/1.19); }
+  document.querySelector('[data-sub="'+ref+'"]').textContent=formatCOP(p*it.qty);
   var t=0; Object.values(state.carrito).forEach(function(i){t+=i.precio*i.qty;});
   document.getElementById('total-display').textContent=formatCOP(t);
   if(state.modo!=='cotizacion') guardarBorrador();
@@ -1065,11 +1099,11 @@ function finalizarPedido(){
   var sigV=document.getElementById('sig-vendedor').toDataURL();
   var sigC=document.getElementById('sig-comprador').toDataURL();
   var total=0;
-  var items=Object.values(state.carrito).map(function(item){var sub=item.precio*item.qty;total+=sub;return{ref:item.prod.ref,nombre:item.prod.nombre,qty:item.qty,precioFinal:item.precio,subtotal:sub,esEscala:item.esEscala,esOverride:item.esOverride};});
+  var items=Object.values(state.carrito).map(function(item){var sub=item.precio*item.qty;total+=sub;return{ref:item.prod.ref,nombre:item.prod.nombre,qty:item.qty,precioFinal:item.precio,precioSinIva:item.precioSinIva||0,subtotal:sub,subtotalSinIva:(item.precioSinIva||0)*item.qty,lista:item.lista||state.lista,esEscala:item.esEscala,esOverride:item.esOverride};});
   var now=new Date();
   var obs=document.getElementById('observaciones');
   var numCompleto = state.pedidoNumCompleto || (String(state.pedidoNum).padStart(5,'0') + '-' + TABLET_ID);
-  var order={num:numCompleto,fecha:now.toLocaleDateString('es-CO'),hora:now.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),cliente:state.cliente,tipo:state.tipo,lista:state.lista,condicion:state.condicion,observaciones:obs?obs.value:'',asesor:document.getElementById('asesor-nombre').value,items:items,total:total,sigVendedor:sigV,sigComprador:sigC,enviado:false,timestamp:now.toISOString()};
+  var order={num:numCompleto,fecha:now.toLocaleDateString('es-CO'),hora:now.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),cliente:state.cliente,tipo:state.tipo,lista:state.lista,zonaSinIva:state.zonaSinIva,condicion:state.condicion,observaciones:obs?obs.value:'',asesor:document.getElementById('asesor-nombre').value,items:items,total:total,sigVendedor:sigV,sigComprador:sigC,enviado:false,timestamp:now.toISOString()};
   savedOrders.push(order);
   localStorage.setItem('hym_orders',JSON.stringify(savedOrders));
   document.getElementById('saved-count').textContent=savedOrders.length;
@@ -1084,25 +1118,56 @@ function finalizarPedido(){
 
 // ── BUILD PDF ──
 function buildPedidoHTML(o){
-  var rows=o.items.map(function(i){return '<tr><td>'+i.qty+'</td><td>'+i.ref+'</td><td>'+i.nombre+'</td><td style="text-align:right;">'+formatCOP(i.precioFinal)+'</td><td style="text-align:right;font-weight:700;">'+formatCOP(i.subtotal)+'</td></tr>';}).join('');
-  for(var i=o.items.length;i<15;i++) rows+='<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>';
+  // Mapeo de lista a etiqueta
+  var listaLabel = {1:'L1', 2:'L2', 3:'L3'};
+  var listaGeneral = listaLabel[o.lista] || 'L1';
+  var sinIva = o.zonaSinIva;
+
+  var subtotalSinIva = 0;
+  var rows=o.items.map(function(i){
+    subtotalSinIva += (i.subtotalSinIva||0);
+    // Marcar lista del producto solo si difiere de la general
+    var marcaLista = '';
+    if(i.lista && listaLabel[i.lista] && listaLabel[i.lista] !== listaGeneral){
+      marcaLista = ' <span style="background:#c0392b;color:white;font-size:8px;font-weight:700;padding:1px 4px;border-radius:3px;">'+listaLabel[i.lista]+'</span>';
+    }
+    var marcaEsp = i.esOverride ? ' <span style="background:#f39c12;color:white;font-size:8px;padding:1px 4px;border-radius:3px;">ESP</span>' : '';
+    return '<tr><td>'+i.qty+'</td><td>'+i.ref+'</td><td>'+i.nombre+marcaLista+marcaEsp+'</td>'+
+      '<td style="text-align:right;color:#1a5276;">'+formatCOP(i.precioSinIva||0)+'</td>'+
+      '<td style="text-align:right;">'+formatCOP(i.precioFinal)+'</td>'+
+      '<td style="text-align:right;font-weight:700;">'+formatCOP(i.subtotal)+'</td></tr>';
+  }).join('');
+  for(var i=o.items.length;i<15;i++) rows+='<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>';
   var obsRow=o.observaciones?'<tr><td colspan="3" style="border:1px solid #999;padding:6px;background:#fffde7;font-size:10px;"><b>Observaciones:</b> '+o.observaciones+'</td></tr>':'';
-  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;font-size:11px;margin:20px;}.hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}table{width:100%;border-collapse:collapse;font-size:10px;margin-bottom:8px;}td,th{border:1px solid #999;padding:4px 6px;}thead tr{background:#333;color:white;}thead td,thead th{border-color:#333;}.frow{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}.notice{font-size:9px;max-width:58%;color:#555;border:1px solid #ccc;padding:5px;}.sigs{display:flex;gap:20px;margin-bottom:8px;}.sbox{flex:1;border-top:2px solid #333;padding-top:4px;}.legal{font-size:8.5px;color:#666;border-top:1px solid #ccc;padding-top:6px;}</style></head><body>'+
+
+  var ivaValor = sinIva ? 0 : (o.total - subtotalSinIva);
+
+  // Bloque de totales con desglose
+  var totalesBloque = sinIva
+    ? '<div style="text-align:right;font-size:11px;"><b>ZONA SIN IVA</b></div>'+
+      '<div style="text-align:right;font-size:14px;font-weight:900;">TOTAL $ <span style="color:#c0392b;">'+formatCOP(o.total)+'</span></div>'
+    : '<div style="text-align:right;font-size:10px;color:#555;">Subtotal sin IVA: '+formatCOP(subtotalSinIva)+'</div>'+
+      '<div style="text-align:right;font-size:10px;color:#555;">IVA 19%: '+formatCOP(ivaValor)+'</div>'+
+      '<div style="text-align:right;font-size:14px;font-weight:900;">TOTAL $ <span style="color:#c0392b;">'+formatCOP(o.total)+'</span></div>';
+
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Arial,sans-serif;font-size:11px;margin:20px;}.hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;}table{width:100%;border-collapse:collapse;font-size:10px;margin-bottom:8px;}td,th{border:1px solid #999;padding:4px 6px;}thead tr{background:#333;color:white;}thead td,thead th{border-color:#333;}.frow{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:10px;}.notice{font-size:9px;max-width:55%;color:#555;border:1px solid #ccc;padding:5px;}.sigs{display:flex;gap:20px;margin-bottom:8px;}.sbox{flex:1;border-top:2px solid #333;padding-top:4px;}.legal{font-size:8.5px;color:#666;border-top:1px solid #ccc;padding-top:6px;}.lista-badge{display:inline-block;background:#1a5276;color:white;font-size:11px;font-weight:700;padding:3px 10px;border-radius:4px;}</style></head><body>'+
     '<div class="hdr"><div>'+
     '<div style="font-size:16px;font-weight:900;color:#c0392b;">HERRAMIENTAS Y MAS S.A.S</div>'+
     '<div style="font-size:10px;color:#555;">CARRERA 72A #71A-31 - BARRIO BOYACA REAL - BOGOTA</div>'+
     '<div style="font-size:10px;color:#555;">NIT: 900.938.307-7 - CEL: 313 210 3290 - cartera01@uniher.com</div>'+
-    
+    '</div><div style="text-align:right;">'+
     '<div style="font-size:10px;">'+o.fecha+' '+o.hora+'</div>'+
+    '<div style="margin-top:4px;"><span class="lista-badge">LISTA '+listaGeneral+'</span></div>'+
+    (sinIva?'<div style="margin-top:3px;font-size:9px;color:#c0392b;font-weight:700;">SIN IVA</div>':'')+
     '</div></div>'+
     '<table><tr><td><b>Cliente:</b> '+o.cliente.nombre+'</td><td><b>NIT:</b> '+(o.cliente.nit||'')+'</td><td><b>Asesor:</b> '+(o.asesor||'')+'</td></tr>'+
     '<tr><td><b>Direccion:</b> '+(o.cliente.dir||'')+'</td><td><b>Ciudad:</b> '+(o.cliente.ciudad||'')+'</td><td><b>Celular:</b> '+(o.cliente.cel||'')+'</td></tr>'+
     '<tr><td colspan="3"><b>Condicion:</b> '+o.condicion+' &nbsp; <b>Correo:</b> '+(o.cliente.email||'')+'</td></tr>'+
     obsRow+
     '<tr><td colspan="3" style="font-size:9px;color:#666;">Precios sujetos a revision. Las mercancias viajan por cuenta y riesgo del comprador.</td></tr></table>'+
-    '<table><thead><tr><th>CANT.</th><th>REFERENCIA</th><th>DESCRIPCION</th><th style="text-align:right;">PRECIO UNIT.</th><th style="text-align:right;">TOTAL</th></tr></thead><tbody>'+rows+'</tbody></table>'+
-    '<div class="frow"><div class="notice">ESTIMADO CLIENTE TENGA PRESENTE QUE TODAS SUS ORDENES SON PEDIDOS EN FIRME. NO ENVIAMOS MERCANCIA EN CONSIGNACION, NI ACEPTAMOS DEVOLUCIONES POR BAJA ROTACION.</div>'+
-    '<div style="text-align:right;font-size:14px;font-weight:900;">TOTAL $ <span style="color:#c0392b;">'+formatCOP(o.total)+'</span></div></div>'+
+    '<table><thead><tr><th>CANT.</th><th>REFERENCIA</th><th>DESCRIPCION</th><th style="text-align:right;">P. SIN IVA</th><th style="text-align:right;">PRECIO UNIT.</th><th style="text-align:right;">TOTAL</th></tr></thead><tbody>'+rows+'</tbody></table>'+
+    '<div class="frow"><div class="notice">ESTIMADO CLIENTE TENGA PRESENTE QUE TODAS SUS ORDENES SON PEDIDOS EN FIRME. NO ENVIAMOS MERCANCIA EN CONSIGNACION, NI ACEPTAMOS DEVOLUCIONES POR BAJA ROTACION.<br><span style="font-size:8px;color:#999;">Columna P.SIN IVA y marcas de lista (L1/L2/L3) son de uso interno para facturación. ESP = precio especial autorizado.</span></div>'+
+    '<div>'+totalesBloque+'</div></div>'+
     '<div class="sigs"><div class="sbox"><div style="font-size:9px;font-weight:700;margin-bottom:4px;">FIRMA DEL VENDEDOR:</div><img src="'+o.sigVendedor+'" style="height:50px;max-width:100%;"/><div style="font-size:10px;margin-top:4px;border-top:1px solid #999;padding-top:2px;">'+(o.asesor||'Asesor Comercial')+'</div></div>'+
     '<div class="sbox"><div style="font-size:9px;font-weight:700;margin-bottom:4px;">FIRMA Y SELLO DEL COMPRADOR:</div><img src="'+o.sigComprador+'" style="height:50px;max-width:100%;"/><div style="font-size:10px;margin-top:4px;border-top:1px solid #999;padding-top:2px;">&nbsp;</div></div></div>'+
     '<div class="legal">DOY MI CONSENTIMIENTO EXPRESO E IRREVOCABLE A HERRAMIENTAS Y MAS S.A.S O A QUIEN SEA EN EL FUTURO EL ACREEDOR DEL CREDITO, PARA CONSULTAR Y REPORTAR EN CUALQUIER TIEMPO, EN DATACREDITO O EN CUALQUIER OTRA CENTRAL DE INFORMACION DE RIESGO, TODA LA INFORMACION RELEVANTE PARA CONOCER MI DESEMPENO COMO DEUDOR.</div>'+
@@ -1177,7 +1242,7 @@ function reenviarWhatsApp(num){
 
 // ── RESET ──
 function nuevoPedido(){
-  state={tipo:'normal',lista:1,cliente:{},condicion:'60 dias credito',carrito:{},pedidoNum:null,currentOrder:null,modo:'pedido'};
+  state={tipo:'normal',lista:1,cliente:{},condicion:'60 dias credito',carrito:{},pedidoNum:null,currentOrder:null,modo:'pedido',zonaSinIva:false};
   openQtyIdx=null;
   clearSig('vendedor'); clearSig('comprador');
   ['cli-nombre','cli-nit','cli-dir','cli-ciudad','cli-cel','cli-email','asesor-nombre','observaciones'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
