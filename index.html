@@ -1093,6 +1093,50 @@ function descargarCotizacion() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+
+  // Guardar cotización en el historial de "Guardados"
+  guardarCotizacion();
+}
+
+function guardarCotizacion() {
+  var now = new Date();
+  var items = Object.values(state.carrito).map(function(item) {
+    return {
+      prod: item.prod,
+      qty: item.qty,
+      precio: item.precio,
+      esEscala: item.esEscala,
+      esEscalaIdx: item.esEscalaIdx,
+      esOverride: item.esOverride
+    };
+  });
+  var total = items.reduce(function(s, i){ return s + i.precio * i.qty; }, 0);
+  var cotId = 'COT-' + String(cotizacionNum).padStart(4,'0') + '-' + TABLET_ID;
+
+  var cot = {
+    num: cotId,
+    esCotizacion: true,
+    fecha: now.toLocaleDateString('es-CO'),
+    hora: now.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),
+    cliente: JSON.parse(JSON.stringify(state.cliente)),
+    tipo: state.tipo,
+    lista: state.lista,
+    condicion: state.condicion,
+    asesor: (document.getElementById('asesor-nombre')?document.getElementById('asesor-nombre').value:''),
+    items: items,
+    carritoSnapshot: JSON.parse(JSON.stringify(state.carrito)),
+    total: total,
+    convertida: false,
+    timestamp: now.toISOString()
+  };
+
+  // Evitar duplicar la misma cotización si el asesor descarga varias veces
+  var yaExiste = savedOrders.find(function(o){ return o.num === cotId; });
+  if (!yaExiste) {
+    savedOrders.push(cot);
+    localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
+    document.getElementById('saved-count').textContent = savedOrders.length;
+  }
 }
 function finalizarPedido(){
   if(!sigS.comprador.has){alert('El cliente debe firmar el pedido');return;}
@@ -1209,8 +1253,26 @@ function verPDF(){
 // ── SAVED ──
 function renderSaved(){
   var list=document.getElementById('saved-list');
-  if(!savedOrders.length){list.innerHTML='<div style="text-align:center;color:#aaa;padding:40px 0;font-size:13px;">No hay pedidos guardados aun</div>';return;}
+  if(!savedOrders.length){list.innerHTML='<div style="text-align:center;color:#aaa;padding:40px 0;font-size:13px;">No hay pedidos ni cotizaciones guardadas aun</div>';return;}
   list.innerHTML=savedOrders.slice().reverse().map(function(o){
+    var esCot = o.esCotizacion === true;
+    if (esCot) {
+      var badgeConv = o.convertida ? '<span style="background:#eaf6ee;color:#1e6e3e;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:4px;">CONVERTIDA A PEDIDO</span>' : '';
+      return '<div class="saved-item" style="border-left:4px solid #2980b9;">'+
+        '<div class="saved-item-top">'+
+          '<div style="background:#2980b9;color:white;font-size:9px;font-weight:700;padding:3px 8px;border-radius:3px;">COTIZACIÓN</div>'+
+          '<div class="saved-info">'+
+            '<div class="saved-name">'+o.cliente.nombre+badgeConv+'</div>'+
+            '<div class="saved-meta">'+o.num+' \u00b7 '+o.fecha+' \u00b7 '+o.items.length+' productos</div>'+
+          '</div>'+
+          '<div class="saved-total">'+formatCOP(o.total)+'</div>'+
+        '</div>'+
+        '<div class="saved-actions">'+
+          '<button class="saved-act-btn saved-act-pdf" onclick="verCotizacionGuardada(\''+o.num+'\')">&#128196; Ver PDF</button>'+
+          '<button class="saved-act-btn" style="background:#c0392b;color:white;" onclick="convertirAPedido(\''+o.num+'\')">&#128260; Convertir a Pedido</button>'+
+        '</div>'+
+      '</div>';
+    }
     return '<div class="saved-item">'+
       '<div class="saved-item-top">'+
         '<div class="status-dot '+(o.enviado?'dot-sent':'dot-pending')+'"></div>'+
@@ -1226,6 +1288,89 @@ function renderSaved(){
       '</div>'+
     '</div>';
   }).join('');
+}
+
+function verCotizacionGuardada(num) {
+  var cot = savedOrders.find(function(x){ return x.num === num; });
+  if (!cot) return;
+  // Cargar temporalmente el estado para renderizar la cotización
+  var estadoPrevio = {
+    carrito: state.carrito,
+    cliente: state.cliente,
+    tipo: state.tipo,
+    lista: state.lista,
+    condicion: state.condicion
+  };
+  state.carrito = cot.carritoSnapshot || {};
+  state.cliente = cot.cliente || {};
+  state.tipo = cot.tipo || 'normal';
+  state.lista = cot.lista || 1;
+  state.condicion = cot.condicion || '';
+  // Necesitamos que el N° de cotización mostrado coincida con el guardado
+  var partesCot = cot.num.split('-'); // COT-XXXX-TABLETID
+  var numGuardado = parseInt(partesCot[1]);
+  var previoNum = cotizacionNum;
+  cotizacionNum = numGuardado - 1; // renderCotizacion suma 1
+  var previewOld = document.getElementById('cotizacion-preview').innerHTML;
+  document.getElementById('cotizacion-preview').innerHTML = buildCotizacionHTML();
+  cotizacionNum = previoNum;
+  goTo('cotizacion');
+  // Restaurar estado después de un momento (para que el asesor pueda descargar de nuevo si quiere)
+  // Pero mantener el carrito cargado por si convierte a pedido
+}
+
+function convertirAPedido(num) {
+  var cot = savedOrders.find(function(x){ return x.num === num; });
+  if (!cot) return;
+  if (!confirm('¿Convertir esta cotización en pedido? Se cargarán todos los productos y datos del cliente para continuar el flujo de pedido.')) return;
+
+  // Cargar los datos de la cotización al estado actual
+  state = {
+    tipo: cot.tipo || 'normal',
+    lista: cot.lista || 1,
+    cliente: JSON.parse(JSON.stringify(cot.cliente || {})),
+    condicion: cot.condicion || '60 dias credito',
+    carrito: JSON.parse(JSON.stringify(cot.carritoSnapshot || {})),
+    pedidoNum: null,
+    currentOrder: null,
+    modo: 'pedido',
+    zonaSinIva: false
+  };
+  openQtyIdx = null;
+
+  // Marcar la cotización como convertida (queda en el histórico)
+  savedOrders = savedOrders.map(function(o){
+    return o.num === num ? Object.assign({}, o, {convertida: true}) : o;
+  });
+  localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
+
+  // Rellenar los campos del formulario del cliente
+  var cli = cot.cliente || {};
+  ['nombre','nit','dir','ciudad','cel','email'].forEach(function(k){
+    var idMap = {nombre:'cli-nombre', nit:'cli-nit', dir:'cli-dir', ciudad:'cli-ciudad', cel:'cli-cel', email:'cli-email'};
+    var el = document.getElementById(idMap[k]);
+    if (el) el.value = cli[k] || '';
+  });
+
+  // Seleccionar el tipo de cliente correcto
+  if (cot.tipo === 'distribuidor') {
+    document.getElementById('opt-normal').classList.remove('selected');
+    document.getElementById('opt-dist').classList.add('selected');
+  } else {
+    document.getElementById('opt-normal').classList.add('selected');
+    document.getElementById('opt-dist').classList.remove('selected');
+  }
+  document.getElementById('lista-select').value = String(cot.lista || 1);
+  document.getElementById('condicion').value = cot.condicion || '60 dias credito';
+
+  // Cargar productos si aún no están cargados
+  PRODUCTOS = getProductosActivos();
+
+  // Poner en modo pedido (no cotización)
+  seleccionarModo('pedido');
+
+  // Ir directo a la pantalla de revisar pedido
+  goTo('review');
 }
 function verPDFGuardado(num){
   var o=savedOrders.find(function(x){return x.num===num;});
