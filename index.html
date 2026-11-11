@@ -216,7 +216,14 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red);}
       <button onclick="sincronizarTodosPendientes()" style="background:#27ae60;color:white;border:none;border-radius:6px;padding:10px 16px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;">&#8593; Sincronizar ahora</button>
     </div>
     <div id="sync-resultado" style="display:none;border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:13px;font-weight:600;"></div>
+    <div id="espacio-info" style="display:none;background:#fff8e1;border:1px solid #f9c851;border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#7d5c00;align-items:center;gap:10px;">
+      <span id="espacio-texto" style="flex:1;"></span>
+      <button onclick="liberarEspacioManual()" style="background:#e67e22;color:white;border:none;border-radius:5px;padding:8px 12px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">&#128465; Liberar espacio</button>
+    </div>
     <div id="saved-list"></div>
+    <div id="saved-ver-todos" style="display:none;text-align:center;margin-top:10px;">
+      <button onclick="toggleVerTodos()" id="btn-ver-todos" style="background:white;border:1.5px solid var(--border);border-radius:6px;padding:10px 20px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;color:var(--dark);">Ver todos los pedidos</button>
+    </div>
   </div>
 </div>
 
@@ -319,9 +326,10 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red);}
     <div><div class="nav-title">Cotización</div></div>
   </div>
   <div id="cotizacion-preview" style="background:white;border:1px solid #ccc;border-radius:8px;padding:20px;"></div>
-  <div style="display:flex;gap:10px;margin-top:12px;">
-    <button class="btn btn-primary" style="flex:1;" onclick="descargarCotizacion()">&#8595; Descargar PDF</button>
-    <button class="btn btn-outline" style="flex:1;" onclick="nuevoPedido()">&#10133; Nuevo</button>
+  <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
+    <button class="btn btn-primary" style="flex:1;min-width:140px;" onclick="descargarCotizacion()">&#8595; Descargar PDF</button>
+    <button class="btn btn-outline" style="flex:1;min-width:140px;background:#eaf4fb;border-color:#2980b9;color:#1a5276;" onclick="otraCotizacionMismoCliente()">&#128221; Otra cotización al mismo cliente</button>
+    <button class="btn btn-outline" style="flex:1;min-width:140px;" onclick="nuevoPedido()">&#10133; Nuevo cliente</button>
   </div>
 </div>
 
@@ -921,14 +929,108 @@ function sincronizarPedido(order) {
 }
 
 function marcarSincronizado(num) {
+  // Cuando un pedido ya se envió al sistema, las firmas en base64 ya no se necesitan en la tableta
+  // (quedan registradas en el PDF original y en el sistema). Borrarlas ahorra ~70% del espacio por pedido
+  // y evita que localStorage se sature con 100+ pedidos.
   savedOrders = savedOrders.map(function(s) {
-    return s.num === num ? Object.assign({}, s, {sincronizado: true}) : s;
+    if (s.num !== num) return s;
+    var limpio = Object.assign({}, s, {sincronizado: true, enviado: true});
+    // Quitar las firmas pesadas; marcar que estaban presentes para mostrar "Firmado" en el histórico
+    if (limpio.sigVendedor)  { limpio.firmadoVendedor = true;  delete limpio.sigVendedor;  }
+    if (limpio.sigComprador) { limpio.firmadoComprador = true; delete limpio.sigComprador; }
+    return limpio;
   });
-  localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
+  guardarOrdersConSeguridad();
   syncQueue = syncQueue.filter(function(n) { return n !== num; });
   localStorage.setItem('hym_sync_queue', JSON.stringify(syncQueue));
   var el = document.getElementById('sync-estado');
   if (el) el.innerHTML = '<span style="color:var(--green);">&#10003; Pedido enviado al sistema</span>';
+}
+
+// Guardado seguro: si localStorage está lleno, ejecuta limpieza automática y reintenta
+function guardarOrdersConSeguridad() {
+  try {
+    localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
+    return true;
+  } catch(e) {
+    // Almacenamiento lleno — intentar limpieza automática del mes anterior y reintentar
+    console.warn('localStorage lleno, ejecutando limpieza de emergencia');
+    limpiarPedidosViejos(true); // true = modo emergencia
+    try {
+      localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
+      return true;
+    } catch(e2) {
+      alert('⚠️ El almacenamiento de la tableta está lleno.\n\nPor favor ve a "Guardados" y presiona "Liberar espacio" para borrar pedidos viejos ya enviados.');
+      return false;
+    }
+  }
+}
+
+// Calcula cuánto espacio está usando la app en localStorage
+function espacioUsadoKB() {
+  var total = 0;
+  try {
+    for (var k in localStorage) {
+      if (localStorage.hasOwnProperty(k) && k.indexOf('hym_') === 0) {
+        total += (localStorage[k].length + k.length) * 2; // UTF-16 ≈ 2 bytes por char
+      }
+    }
+  } catch(e) {}
+  return Math.round(total / 1024);
+}
+
+// Limpieza mensual automática: borra pedidos del mes anterior al llegar al día 25
+function limpiarPedidosViejos(modoEmergencia) {
+  var hoy = new Date();
+  var mesActual = hoy.getMonth();
+  var anioActual = hoy.getFullYear();
+
+  // Mes a borrar = mes anterior al actual
+  var mesBorrar = mesActual === 0 ? 11 : mesActual - 1;
+  var anioBorrar = mesActual === 0 ? anioActual - 1 : anioActual;
+
+  var antes = savedOrders.length;
+  savedOrders = savedOrders.filter(function(o) {
+    if (!o.timestamp) return true; // sin fecha, conservar por si acaso
+    var d = new Date(o.timestamp);
+    // Conservar los que NO sean del mes/año a borrar
+    return !(d.getMonth() === mesBorrar && d.getFullYear() === anioBorrar);
+  });
+
+  // En modo emergencia, si aún quedan muchos pedidos viejos sincronizados, borrar los de hace 2+ meses también
+  if (modoEmergencia && savedOrders.length > 50) {
+    var corte = new Date(anioActual, mesActual - 2, 1); // hace 2 meses
+    savedOrders = savedOrders.filter(function(o) {
+      if (!o.timestamp) return true;
+      if (!o.sincronizado) return true; // no borrar los no sincronizados aunque sean viejos
+      return new Date(o.timestamp) >= corte;
+    });
+  }
+
+  var borrados = antes - savedOrders.length;
+  try {
+    localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
+    localStorage.setItem('hym_ultima_limpieza', String(Date.now()));
+  } catch(e) {}
+  return borrados;
+}
+
+// Verifica si toca hacer limpieza automática (día 25 o posterior del mes, una vez al mes)
+function verificarLimpiezaMensual() {
+  var hoy = new Date();
+  if (hoy.getDate() < 25) return;
+
+  var ultima = parseInt(localStorage.getItem('hym_ultima_limpieza') || '0');
+  if (ultima > 0) {
+    var dUlt = new Date(ultima);
+    // Si la última limpieza fue este mismo mes, no repetir
+    if (dUlt.getMonth() === hoy.getMonth() && dUlt.getFullYear() === hoy.getFullYear()) return;
+  }
+
+  var borrados = limpiarPedidosViejos(false);
+  if (borrados > 0) {
+    console.log('Limpieza mensual: ' + borrados + ' pedidos viejos borrados');
+  }
 }
 
 function encolarParaSync(num) {
@@ -1022,8 +1124,8 @@ function continvarDesdeReview() {
 var cotizacionNum = parseInt(localStorage.getItem('hym_cotizacion_num')||'1');
 
 function renderCotizacion() {
-  cotizacionNum++;
-  localStorage.setItem('hym_cotizacion_num', String(cotizacionNum));
+  // Usar el número actual - solo se incrementará al descargar efectivamente la cotización.
+  // Esto evita saltos en la numeración si el asesor abre la pantalla varias veces.
   var preview = document.getElementById('cotizacion-preview');
   preview.innerHTML = buildCotizacionHTML();
 }
@@ -1131,13 +1233,24 @@ function guardarCotizacion() {
     timestamp: now.toISOString()
   };
 
-  // Evitar duplicar la misma cotización si el asesor descarga varias veces
-  var yaExiste = savedOrders.find(function(o){ return o.num === cotId; });
-  if (!yaExiste) {
-    savedOrders.push(cot);
-    localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
-    document.getElementById('saved-count').textContent = savedOrders.length;
+  // Si ya existe una cotización con este mismo número (descargaron dos veces seguidas sin cambiar nada),
+  // reemplazarla con la versión actualizada en vez de bloquear la descarga
+  var idxExiste = -1;
+  for (var k = 0; k < savedOrders.length; k++) {
+    if (savedOrders[k].num === cotId) { idxExiste = k; break; }
   }
+  if (idxExiste >= 0) {
+    savedOrders[idxExiste] = cot;
+  } else {
+    savedOrders.push(cot);
+  }
+  guardarOrdersConSeguridad();
+  document.getElementById('saved-count').textContent = savedOrders.length;
+
+  // Avanzar el contador para que la PRÓXIMA cotización tenga un número distinto,
+  // incluso si es al mismo cliente sin salir al menú principal
+  cotizacionNum++;
+  localStorage.setItem('hym_cotizacion_num', String(cotizacionNum));
 }
 function finalizarPedido(){
   if(!sigS.comprador.has){alert('El cliente debe firmar el pedido');return;}
@@ -1150,7 +1263,7 @@ function finalizarPedido(){
   var numCompleto = state.pedidoNumCompleto || (String(state.pedidoNum).padStart(5,'0') + '-' + TABLET_ID);
   var order={num:numCompleto,fecha:now.toLocaleDateString('es-CO'),hora:now.toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}),cliente:state.cliente,tipo:state.tipo,lista:state.lista,zonaSinIva:state.zonaSinIva,condicion:state.condicion,observaciones:obs?obs.value:'',asesor:document.getElementById('asesor-nombre').value,items:items,total:total,sigVendedor:sigV,sigComprador:sigC,enviado:false,timestamp:now.toISOString()};
   savedOrders.push(order);
-  localStorage.setItem('hym_orders',JSON.stringify(savedOrders));
+  guardarOrdersConSeguridad();
   document.getElementById('saved-count').textContent=savedOrders.length;
   state.currentOrder=order;
   document.getElementById('success-num').textContent='Pedido N° '+order.num;
@@ -1239,7 +1352,7 @@ function enviarWhatsApp(){
     nl+'El archivo del pedido se descargo en tu carpeta Descargas. Adjuntalo a este chat.';
   setTimeout(function(){window.open('https://wa.me/573113909852?text='+encodeURIComponent(msg),'_blank');},600);
   savedOrders=savedOrders.map(function(s){return s.num===o.num?Object.assign({},s,{enviado:true}):s;});
-  localStorage.setItem('hym_orders',JSON.stringify(savedOrders));
+  guardarOrdersConSeguridad();
 }
 
 // ── PDF PREVIEW ──
@@ -1252,10 +1365,39 @@ function verPDF(){
 }
 
 // ── SAVED ──
+var LIMITE_SAVED = 30;
+var mostrarTodos = false;
+
 function renderSaved(){
   var list=document.getElementById('saved-list');
-  if(!savedOrders.length){list.innerHTML='<div style="text-align:center;color:#aaa;padding:40px 0;font-size:13px;">No hay pedidos ni cotizaciones guardadas aun</div>';return;}
-  list.innerHTML=savedOrders.slice().reverse().map(function(o){
+  var verTodosDiv=document.getElementById('saved-ver-todos');
+  var btnVerTodos=document.getElementById('btn-ver-todos');
+
+  // Mostrar alerta de almacenamiento si estamos cerca del límite (>4MB de los ~5MB disponibles)
+  actualizarAvisoEspacio();
+
+  if(!savedOrders.length){
+    list.innerHTML='<div style="text-align:center;color:#aaa;padding:40px 0;font-size:13px;">No hay pedidos ni cotizaciones guardadas aun</div>';
+    if(verTodosDiv) verTodosDiv.style.display='none';
+    return;
+  }
+
+  // Ordenar del más reciente al más viejo y aplicar límite
+  var todos = savedOrders.slice().reverse();
+  var mostrar = mostrarTodos ? todos : todos.slice(0, LIMITE_SAVED);
+
+  if(verTodosDiv){
+    if(todos.length > LIMITE_SAVED){
+      verTodosDiv.style.display='block';
+      btnVerTodos.textContent = mostrarTodos
+        ? 'Mostrar solo los últimos ' + LIMITE_SAVED
+        : 'Ver todos los pedidos (' + todos.length + ')';
+    } else {
+      verTodosDiv.style.display='none';
+    }
+  }
+
+  list.innerHTML=mostrar.map(function(o){
     var esCot = o.esCotizacion === true;
     if (esCot) {
       var badgeConv = o.convertida ? '<span style="background:#eaf6ee;color:#1e6e3e;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:4px;">CONVERTIDA A PEDIDO</span>' : '';
@@ -1289,6 +1431,49 @@ function renderSaved(){
       '</div>'+
     '</div>';
   }).join('');
+}
+
+function toggleVerTodos(){
+  mostrarTodos = !mostrarTodos;
+  renderSaved();
+}
+
+function actualizarAvisoEspacio(){
+  var info = document.getElementById('espacio-info');
+  var txt  = document.getElementById('espacio-texto');
+  if (!info || !txt) return;
+
+  var kb = espacioUsadoKB();
+  // El límite típico de Chrome es ~5120 KB. Avisar al llegar a 3500 KB (~68%)
+  if (kb >= 3500) {
+    info.style.display = 'flex';
+    var mb = (kb/1024).toFixed(1);
+    var sincronizados = savedOrders.filter(function(o){return o.sincronizado;}).length;
+    txt.innerHTML = '<b>⚠️ Almacenamiento al ' + Math.round(kb/5120*100) + '%</b> (' + mb + ' MB usados).<br>' +
+      'Tienes ' + sincronizados + ' pedidos ya enviados que se pueden borrar para liberar espacio.';
+  } else {
+    info.style.display = 'none';
+  }
+}
+
+function liberarEspacioManual(){
+  var sincronizados = savedOrders.filter(function(o){return o.sincronizado || o.enviado;});
+  if (sincronizados.length === 0) {
+    alert('No hay pedidos sincronizados que se puedan borrar.\nTodos los pedidos guardados están aún pendientes de enviar.');
+    return;
+  }
+  if (!confirm('¿Borrar ' + sincronizados.length + ' pedidos ya enviados para liberar espacio?\n\nLos pedidos pendientes de sincronizar NO se tocarán. Los pedidos borrados ya están registrados en el sistema central.')) return;
+
+  var antes = savedOrders.length;
+  savedOrders = savedOrders.filter(function(o){
+    return !(o.sincronizado || o.enviado);
+  });
+  try {
+    localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
+  } catch(e){}
+  document.getElementById('saved-count').textContent = savedOrders.length;
+  alert('✅ Se liberaron ' + (antes - savedOrders.length) + ' pedidos del almacenamiento.');
+  renderSaved();
 }
 
 function verCotizacionGuardada(num) {
@@ -1343,7 +1528,7 @@ function convertirAPedido(num) {
   savedOrders = savedOrders.map(function(o){
     return o.num === num ? Object.assign({}, o, {convertida: true}) : o;
   });
-  localStorage.setItem('hym_orders', JSON.stringify(savedOrders));
+  guardarOrdersConSeguridad();
 
   // Rellenar los campos del formulario del cliente
   var cli = cot.cliente || {};
@@ -1376,12 +1561,19 @@ function convertirAPedido(num) {
 function verPDFGuardado(num){
   var o=savedOrders.find(function(x){return x.num===num;});
   if(!o) return;
+  // Si las firmas fueron borradas al sincronizar, avisar antes de mostrar PDF sin firmas
+  if (!o.sigVendedor && o.firmadoVendedor) {
+    if (!confirm('Este pedido ya fue enviado al sistema. Las firmas digitales fueron borradas de la tableta para liberar espacio.\n\n¿Ver el PDF sin firmas? (El original con firmas está en el sistema central y en el PDF descargado el día del pedido.)')) return;
+  }
   state.currentOrder=o;
   verPDF();
 }
 function reenviarWhatsApp(num){
   var o=savedOrders.find(function(x){return x.num===num;});
   if(!o) return;
+  if (!o.sigVendedor && o.firmadoVendedor) {
+    if (!confirm('Este pedido ya fue enviado. Las firmas se borraron de la tableta.\n\n¿Reenviar por WhatsApp sin firmas?')) return;
+  }
   state.currentOrder=o;
   enviarWhatsApp();
 }
@@ -1402,9 +1594,46 @@ function nuevoPedido(){
   goTo('setup');
 }
 
+// Permite hacer otra cotización al mismo cliente sin salir al menú principal.
+// Mantiene datos del cliente, tipo, zona y condición; limpia carrito y arranca de nuevo en productos.
+function otraCotizacionMismoCliente(){
+  var cliGuardado = JSON.parse(JSON.stringify(state.cliente || {}));
+  var tipoGuardado = state.tipo || 'normal';
+  var listaGuardado = state.lista || 1;
+  var condicionGuardado = state.condicion || '60 dias credito';
+
+  state.carrito = {};
+  state.pedidoNum = null;
+  state.currentOrder = null;
+  state.modo = 'cotizacion';
+  openQtyIdx = null;
+
+  state.cliente = cliGuardado;
+  state.tipo = tipoGuardado;
+  state.lista = listaGuardado;
+  state.condicion = condicionGuardado;
+
+  var mapa = {nombre:'cli-nombre', nit:'cli-nit', dir:'cli-dir', ciudad:'cli-ciudad', cel:'cli-cel', email:'cli-email'};
+  Object.keys(mapa).forEach(function(k){
+    var el = document.getElementById(mapa[k]);
+    if (el) el.value = cliGuardado[k] || '';
+  });
+
+  var sb = document.getElementById('search-input'); if(sb) sb.value='';
+
+  if (typeof seleccionarModo === 'function') seleccionarModo('cotizacion');
+
+  PRODUCTOS = getProductosActivos();
+  goTo('products');
+}
+
 document.getElementById('saved-count').textContent=savedOrders.length;
 // Mostrar banner si hay un pedido en curso sin terminar
 if(borrador) mostrarBannerBorrador();
+
+// Limpieza mensual automática al abrir la app (día 25+ borra pedidos del mes anterior)
+try { verificarLimpiezaMensual(); } catch(e) { console.warn('Limpieza mensual falló:', e); }
+document.getElementById('saved-count').textContent=savedOrders.length;
 </script>
 <script>
 if ('serviceWorker' in navigator) {
